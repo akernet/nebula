@@ -16,6 +16,10 @@ type DeviceFactory func(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, routi
 func NewDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, routines int) (Device, error) {
 	switch {
 	case c.GetBool("tun.disabled", false):
+		if c.GetMap("forwarding", nil) != nil {
+			return NewUserDeviceFromConfig(c, l, tunCidr, routines)
+		}
+
 		tun := newDisabledTun(tunCidr, c.GetInt("tun.tx_queue", 500), c.GetBool("stats.message_metrics", false), l)
 		return tun, nil
 

@@ -302,6 +302,15 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		dnsStart = dnsMain(l, hostMap, c)
 	}
 
+	// Setup forwardings if tun is disabled and user device is used instead.
+	userDevice, ok := ifce.inside.(*overlay.UserDevice)
+	if ok {
+		err := setupForwarding(l, c, userDevice)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &Control{
 		ifce,
 		l,
