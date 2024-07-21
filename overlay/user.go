@@ -1,6 +1,8 @@
 package overlay
 
 import (
+	"bytes"
+	"fmt"
 	"io"
 	"net"
 
@@ -9,14 +11,68 @@ import (
 	"github.com/slackhq/nebula/iputil"
 )
 
+type BufferedPipe struct {
+	close chan struct{}
+	buf   chan []byte
+}
+
+type BufferedPipeReader struct{ BufferedPipe }
+type BufferedPipeWriter struct{ BufferedPipe }
+
+func (p BufferedPipeReader) Read(data []byte) (int, error) {
+	select {
+	case d := <-p.buf:
+		{
+			copy(data, d)
+			return len(d), nil
+		}
+	case <-p.close:
+		{
+			return 0, fmt.Errorf("pipe closed")
+		}
+	}
+}
+
+func (p BufferedPipeReader) Close() error {
+	p.close <- struct{}{}
+	return nil
+}
+
+func (p BufferedPipeWriter) Write(data []byte) (int, error) {
+	c := bytes.Clone(data)
+	select {
+	case <-p.close:
+		{
+			return 0, fmt.Errorf("pipe closed")
+		}
+	case p.buf <- c:
+		{
+		}
+	}
+	return len(data), nil
+}
+
+func (p BufferedPipeWriter) Close() error {
+	p.close <- struct{}{}
+	return nil
+}
+
+func NewBufferedPipe(depth int) (BufferedPipeReader, BufferedPipeWriter) {
+	pipe := BufferedPipe{
+		make(chan struct{}),
+		make(chan []byte, depth),
+	}
+	return BufferedPipeReader{pipe}, BufferedPipeWriter{pipe}
+}
+
 func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, routines int) (Device, error) {
 	return NewUserDevice(tunCidr)
 }
 
 func NewUserDevice(tunCidr *net.IPNet) (Device, error) {
 	// these pipes guarantee each write/read will match 1:1
-	or, ow := io.Pipe()
-	ir, iw := io.Pipe()
+	or, ow := NewBufferedPipe(40)
+	ir, iw := NewBufferedPipe(40)
 	return &UserDevice{
 		tunCidr:        tunCidr,
 		outboundReader: or,
@@ -29,11 +85,11 @@ func NewUserDevice(tunCidr *net.IPNet) (Device, error) {
 type UserDevice struct {
 	tunCidr *net.IPNet
 
-	outboundReader *io.PipeReader
-	outboundWriter *io.PipeWriter
+	outboundReader BufferedPipeReader
+	outboundWriter BufferedPipeWriter
 
-	inboundReader *io.PipeReader
-	inboundWriter *io.PipeWriter
+	inboundReader BufferedPipeReader
+	inboundWriter BufferedPipeWriter
 }
 
 func (d *UserDevice) Activate() error {
@@ -46,7 +102,7 @@ func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return d, nil
 }
 
-func (d *UserDevice) Pipe() (*io.PipeReader, *io.PipeWriter) {
+func (d *UserDevice) Pipe() (BufferedPipeReader, BufferedPipeWriter) {
 	return d.inboundReader, d.outboundWriter
 }
 
